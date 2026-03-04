@@ -4,8 +4,8 @@ Data models for the Market Prompt Ambiguity Risk Scoring System.
 This module defines the Pydantic models used for structured data throughout the system.
 """
 
-from pydantic import BaseModel, Field
 from typing import List, Optional
+from pydantic import BaseModel, Field
 
 
 class RiskScoreResult(BaseModel):
@@ -37,6 +37,10 @@ class RiskScoreResult(BaseModel):
         ge=0.0,
         le=1.0,
         description="Confidence level of the assessment"
+    )
+    search_debug: Optional["SearchDebugInfo"] = Field(
+        None,
+        description="Optional web-search debug information for evidence-chain inspection"
     )
 
     class Config:
@@ -112,6 +116,43 @@ class SearchContext(BaseModel):
     )
 
 
+class SearchDebugInfo(BaseModel):
+    """
+    Optional debug information for web-search evidence chains.
+
+    Attributes:
+        provider: Search provider name
+        initial_query: Primary search query
+        follow_up_queries: Additional site-biased queries
+        raw_answer: Provider summary from the primary search response
+        raw_results: Normalized search results before reranking
+        simplified_context: Reranked search context used for prompting
+        formatted_context: Prompt-ready search context string
+    """
+    provider: str = Field(..., description="Search provider name")
+    initial_query: str = Field(..., description="Primary query sent to the search provider")
+    follow_up_queries: List[str] = Field(
+        default_factory=list,
+        description="Additional follow-up queries sent to the search provider"
+    )
+    raw_answer: Optional[str] = Field(
+        None,
+        description="Provider-generated answer or summary from the primary search request"
+    )
+    raw_results: List[SearchEvidenceItem] = Field(
+        default_factory=list,
+        description="Normalized search results before reranking"
+    )
+    simplified_context: SearchContext = Field(
+        ...,
+        description="Reranked search context used for prompt injection"
+    )
+    formatted_context: str = Field(
+        ...,
+        description="Prompt-ready text derived from the simplified context"
+    )
+
+
 class MarketProposal(BaseModel):
     """
     Input model for a market proposal.
@@ -136,3 +177,6 @@ class MarketProposal(BaseModel):
                 "context": None
             }
         }
+
+
+RiskScoreResult.model_rebuild()

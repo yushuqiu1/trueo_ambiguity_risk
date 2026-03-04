@@ -14,7 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import analyze_market_prompt
-from models import RiskScoreResult, SearchContext, SearchEvidenceItem
+from models import RiskScoreResult, SearchContext, SearchDebugInfo, SearchEvidenceItem
 from config import FEW_SHOT_EXAMPLES_PATH
 from search import WebSearchClient, build_official_site_queries, format_search_context
 
@@ -284,6 +284,111 @@ def test_analyze_market_prompt_with_web_search():
     print("="*60)
 
 
+def test_search_debug_is_optional():
+    """
+    Test that search debug information is omitted unless explicitly requested.
+    """
+    print("\n" + "="*60)
+    print("TEST: Search Debug Optionality")
+    print("="*60)
+
+    class FakeScorer:
+        def score(self, question: str, context=None, include_few_shot: bool = True):
+            return RiskScoreResult(
+                risk_score=40,
+                risk_tags=["undefined_term"],
+                rationale="Test result from mocked scorer.",
+            )
+
+    with patch("main.RiskScorer", FakeScorer):
+        result = analyze_market_prompt(
+            "Will OpenAI release a new model in March this year?",
+            use_web_search=False,
+        )
+
+    assert result.search_debug is None
+
+    print("\n✓ search_debug is absent by default")
+
+    print("\n" + "="*60)
+    print("✅ TEST PASSED: Search Debug Optionality")
+    print("="*60)
+
+
+def test_analyze_market_prompt_returns_search_debug():
+    """
+    Test that analyze_market_prompt can return evidence-chain debug information.
+    """
+    print("\n" + "="*60)
+    print("TEST: Analyze Market Prompt Returns Search Debug")
+    print("="*60)
+
+    fake_debug = SearchDebugInfo(
+        provider="tavily",
+        initial_query="Will OpenAI release a new model in March this year? official source definition resolution criteria",
+        follow_up_queries=["site:openai.com Will OpenAI release a new model in March this year? official announcement release"],
+        raw_answer="Primary provider answer.",
+        raw_results=[
+            SearchEvidenceItem(
+                title="Community Source",
+                url="https://manifold.markets/example",
+                snippet="Community snippet.",
+                source="manifold.markets",
+                score=0.91,
+            )
+        ],
+        simplified_context=SearchContext(
+            query="Will OpenAI release a new model in March this year? official source definition resolution criteria",
+            provider="tavily",
+            summary="Simplified summary.",
+            evidence=[
+                SearchEvidenceItem(
+                    title="OpenAI Newsroom",
+                    url="https://openai.com/newsroom",
+                    snippet="Official snippet.",
+                    source="openai.com",
+                    score=0.50,
+                )
+            ],
+        ),
+        formatted_context="Web Search Evidence:\nProvider: tavily\nTop Sources:\n1. OpenAI Newsroom",
+    )
+
+    class FakeSearchClient:
+        def search_with_debug(self, question: str) -> SearchDebugInfo:
+            return fake_debug
+
+        def build_context(self, question: str) -> str:
+            raise AssertionError("build_context should not be called when include_search_debug=True")
+
+    class FakeScorer:
+        def score(self, question: str, context=None, include_few_shot: bool = True):
+            return RiskScoreResult(
+                risk_score=55,
+                risk_tags=["unverified_source"],
+                rationale="Test result from mocked scorer.",
+            )
+
+    with patch("main.WebSearchClient", FakeSearchClient), patch("main.RiskScorer", FakeScorer):
+        result = analyze_market_prompt(
+            "Will OpenAI release a new model in March this year?",
+            use_web_search=True,
+            include_search_debug=True,
+        )
+
+    assert result.search_debug is not None
+    assert result.search_debug.initial_query == fake_debug.initial_query
+    assert result.search_debug.raw_results[0].source == "manifold.markets"
+    assert result.search_debug.simplified_context.evidence[0].source == "openai.com"
+    assert "OpenAI Newsroom" in result.search_debug.formatted_context
+
+    print("\n✓ search_debug returns raw and simplified evidence-chain data")
+
+    print("\n" + "="*60)
+    print("✅ TEST PASSED: Analyze Market Prompt Returns Search Debug")
+    print("="*60)
+
+
 def test_official_sources_are_prioritized():
     """
     Test that official-looking domains are ranked ahead of media and community sources.
@@ -343,6 +448,8 @@ def test_official_site_queries_are_generated():
     queries = build_official_site_queries("Will OpenAI release a new model in March this year?")
 
     assert any("site:openai.com" in query for query in queries)
+    assert not any("site:will.com" in query for query in queries)
+    assert not any("site:march.com" in query for query in queries)
 
     print("\n✓ Official site follow-up query generated for OpenAI")
 
@@ -402,6 +509,57 @@ def test_search_merges_official_site_results():
     print("="*60)
 
 
+def test_search_with_debug_returns_evidence_chain():
+    """
+    Test that search_with_debug exposes raw results and simplified context together.
+    """
+    print("\n" + "="*60)
+    print("TEST: Search With Debug Evidence Chain")
+    print("="*60)
+
+    client = WebSearchClient(api_key="test-key")
+
+    def fake_run_search_request(query: str):
+        if query.startswith("site:openai.com"):
+            return {
+                "answer": None,
+                "results": [
+                    {
+                        "title": "OpenAI Official Announcement",
+                        "url": "https://openai.com/index/introducing-example",
+                        "content": "Official announcement from OpenAI.",
+                        "score": 0.40,
+                    }
+                ],
+            }
+        return {
+            "answer": "Primary provider answer",
+            "results": [
+                {
+                    "title": "Community Discussion",
+                    "url": "https://manifold.markets/example",
+                    "content": "Community discussion.",
+                    "score": 0.95,
+                }
+            ],
+        }
+
+    with patch.object(client, "_run_search_request", side_effect=fake_run_search_request):
+        debug_info = client.search_with_debug("Will OpenAI release a new model in March this year?")
+
+    assert debug_info.raw_answer == "Primary provider answer"
+    assert any(item.source == "manifold.markets" for item in debug_info.raw_results)
+    assert any(item.source == "openai.com" for item in debug_info.raw_results)
+    assert debug_info.simplified_context.evidence[0].source == "openai.com"
+    assert "Web Search Evidence:" in debug_info.formatted_context
+
+    print("\n✓ search_with_debug returns raw results and simplified context")
+
+    print("\n" + "="*60)
+    print("✅ TEST PASSED: Search With Debug Evidence Chain")
+    print("="*60)
+
+
 def run_all_tests():
     """
     Run all tests and report results.
@@ -415,9 +573,12 @@ def run_all_tests():
         ("Web Search Context Formatting", test_format_search_context),
         ("Web Search API Key Requirement", test_web_search_requires_api_key),
         ("Web Search Integration", test_analyze_market_prompt_with_web_search),
+        ("Search Debug Optionality", test_search_debug_is_optional),
+        ("Search Debug Output", test_analyze_market_prompt_returns_search_debug),
         ("Official Source Prioritization", test_official_sources_are_prioritized),
         ("Official Site Query Generation", test_official_site_queries_are_generated),
         ("Official Site Search Merge", test_search_merges_official_site_results),
+        ("Search With Debug Evidence Chain", test_search_with_debug_returns_evidence_chain),
         ("Basic Analysis", test_basic_analysis),
         ("Output Format", test_output_format),
         ("High Risk Detection", test_high_risk_question),

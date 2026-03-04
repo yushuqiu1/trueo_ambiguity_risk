@@ -19,7 +19,7 @@ from config import (
     TAVILY_API_KEY,
     TAVILY_SEARCH_URL,
 )
-from models import SearchContext, SearchEvidenceItem
+from models import SearchContext, SearchDebugInfo, SearchEvidenceItem
 
 COMMUNITY_DOMAINS = {
     "reddit.com",
@@ -161,18 +161,48 @@ class WebSearchClient:
         Returns:
             Structured search context
         """
-        query = build_search_query(question)
-        primary_response = self._run_search_request(query)
+        return self.search_with_debug(question).simplified_context
 
-        merged_results = list(primary_response.get("results", []))
-        for official_query in build_official_site_queries(question):
+    def search_with_debug(self, question: str) -> SearchDebugInfo:
+        """
+        Search the web and return both prompt-ready context and debug information.
+
+        Args:
+            question: Market question to search around
+
+        Returns:
+            SearchDebugInfo containing raw and simplified evidence chains
+        """
+        initial_query = build_search_query(question)
+        follow_up_queries = build_official_site_queries(question)
+        primary_response = self._run_search_request(initial_query)
+
+        raw_results = list(primary_response.get("results", []))
+        merged_results = list(raw_results)
+        for official_query in follow_up_queries:
             official_response = self._run_search_request(official_query)
             merged_results.extend(official_response.get("results", []))
 
-        combined_response = dict(primary_response)
-        combined_response["results"] = self._deduplicate_results(merged_results)
+        deduplicated_results = self._deduplicate_results(merged_results)
+        raw_evidence = self._normalize_results(deduplicated_results)
+        search_context = self._parse_response(
+            query=initial_query,
+            response_data={
+                "answer": primary_response.get("answer"),
+                "results": deduplicated_results,
+            },
+        )
+        formatted_context = format_search_context(search_context)
 
-        return self._parse_response(query=query, response_data=combined_response)
+        return SearchDebugInfo(
+            provider="tavily",
+            initial_query=initial_query,
+            follow_up_queries=follow_up_queries,
+            raw_answer=self._clean_text(primary_response.get("answer")),
+            raw_results=raw_evidence,
+            simplified_context=search_context,
+            formatted_context=formatted_context,
+        )
 
     def build_context(self, question: str) -> str:
         """
@@ -184,7 +214,7 @@ class WebSearchClient:
         Returns:
             Formatted web-search context string
         """
-        return format_search_context(self.search(question))
+        return self.search_with_debug(question).formatted_context
 
     def _parse_response(self, query: str, response_data: Dict[str, Any]) -> SearchContext:
         """
@@ -197,26 +227,7 @@ class WebSearchClient:
         Returns:
             Structured search context
         """
-        evidence = []
-
-        for result in response_data.get("results", []):
-            title = self._clean_text(result.get("title")) or result.get("url") or "Untitled result"
-            url = result.get("url", "")
-            snippet = self._truncate_text(
-                self._clean_text(result.get("content") or result.get("snippet")) or "No snippet provided.",
-                limit=400,
-            )
-            evidence.append(
-                SearchEvidenceItem(
-                    title=title,
-                    url=url,
-                    snippet=snippet,
-                    source=self._extract_source(url),
-                    score=self._safe_float(result.get("score")),
-                    published_date=result.get("published_date"),
-                )
-            )
-
+        evidence = self._normalize_results(response_data.get("results", []))
         evidence = self._prioritize_authoritative_sources(query=query, evidence=evidence)
         summary = self._clean_text(response_data.get("answer")) or self._build_summary(evidence)
 
@@ -270,6 +281,29 @@ class WebSearchClient:
             deduped.append(result)
 
         return deduped
+
+    def _normalize_results(self, results: list[Dict[str, Any]]) -> list[SearchEvidenceItem]:
+        evidence = []
+
+        for result in results:
+            title = self._clean_text(result.get("title")) or result.get("url") or "Untitled result"
+            url = result.get("url", "")
+            snippet = self._truncate_text(
+                self._clean_text(result.get("content") or result.get("snippet")) or "No snippet provided.",
+                limit=400,
+            )
+            evidence.append(
+                SearchEvidenceItem(
+                    title=title,
+                    url=url,
+                    snippet=snippet,
+                    source=self._extract_source(url),
+                    score=self._safe_float(result.get("score")),
+                    published_date=result.get("published_date"),
+                )
+            )
+
+        return evidence
 
     @staticmethod
     def _clean_text(value: Optional[str]) -> Optional[str]:
@@ -390,12 +424,39 @@ class WebSearchClient:
 
 
 def _build_candidate_official_domains(question: str) -> list[str]:
+    excluded_terms = {
+        "will",
+        "would",
+        "could",
+        "should",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "january",
+        "february",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "this",
+        "that",
+    }
     capitalized_terms = re.findall(r"\b[A-Z][A-Za-z0-9]+\b", question)
     candidate_terms = []
 
     for term in capitalized_terms:
         normalized = re.sub(r"[^a-z0-9]", "", term.lower())
-        if len(normalized) >= 3:
+        if len(normalized) >= 3 and normalized not in excluded_terms:
             candidate_terms.append(normalized)
 
     return [f"{term}.com" for term in dict.fromkeys(candidate_terms)]

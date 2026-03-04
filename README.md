@@ -120,6 +120,16 @@ result = analyze_market_prompt(
 )
 ```
 
+To return the web-search evidence chain for product/debug display:
+
+```python
+result = analyze_market_prompt(
+    "Will OpenAI release a new model in March this year?",
+    use_web_search=True,
+    include_search_debug=True
+)
+```
+
 ### How Web Search Is Used
 
 When web search is enabled, the system does four things:
@@ -135,6 +145,18 @@ When web search is enabled, the system does four things:
 5. Formats that simplified context into prompt text and injects it into the ambiguity analysis.
 
 This means the LLM does not receive the full raw API payload. It receives a reduced, prompt-friendly summary of the search evidence.
+
+If `include_search_debug=True`, the final `RiskScoreResult` also includes a `search_debug` field with:
+
+- `provider`
+- `initial_query`
+- `follow_up_queries`
+- `raw_answer`
+- `raw_results` from all search queries before reranking
+- `simplified_context`
+- `formatted_context`
+
+This is intended for debugging and product-side evidence-chain display.
 
 High-level flow:
 
@@ -167,6 +189,12 @@ To augment the analysis with web-search evidence:
 python main.py "Will OpenAI release a new model in March this year?" --use-web-search
 ```
 
+To include the web-search evidence chain in JSON output:
+
+```bash
+python main.py "Will OpenAI release a new model in March this year?" --use-web-search --include-search-debug --json
+```
+
 ## Output Format
 
 ```json
@@ -178,6 +206,8 @@ python main.py "Will OpenAI release a new model in March this year?" --use-web-s
 ```
 
 When web search is enabled, the returned JSON still has the same schema. The search evidence is used internally to improve the score and rationale; it is not returned as a separate field in the final API result.
+
+If `include_search_debug=True`, the JSON response additionally includes a `search_debug` object. By default this field remains `null` unless you explicitly request web-search debug output.
 
 ## Risk Categories
 
