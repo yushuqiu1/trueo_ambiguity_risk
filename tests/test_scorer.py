@@ -14,7 +14,13 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import analyze_market_prompt
-from models import RiskScoreResult, SearchContext, SearchDebugInfo, SearchEvidenceItem
+from models import (
+    RiskScoreResult,
+    SearchContext,
+    SearchDebugInfo,
+    SearchDisplayEvidenceItem,
+    SearchEvidenceItem,
+)
 from config import FEW_SHOT_EXAMPLES_PATH
 from search import WebSearchClient, build_official_site_queries, format_search_context
 
@@ -337,6 +343,19 @@ def test_analyze_market_prompt_returns_search_debug():
                 score=0.91,
             )
         ],
+        display_evidence=[
+            SearchDisplayEvidenceItem(
+                rank=1,
+                title="OpenAI Newsroom",
+                url="https://openai.com/newsroom",
+                source="openai.com",
+                snippet="Official snippet.",
+                relevance_score=0.50,
+                source_category="official",
+                is_official=True,
+                display_reason="Likely official source for announcements or release criteria.",
+            )
+        ],
         simplified_context=SearchContext(
             query="Will OpenAI release a new model in March this year? official source definition resolution criteria",
             provider="tavily",
@@ -379,6 +398,7 @@ def test_analyze_market_prompt_returns_search_debug():
     assert result.search_debug is not None
     assert result.search_debug.initial_query == fake_debug.initial_query
     assert result.search_debug.raw_results[0].source == "manifold.markets"
+    assert result.search_debug.display_evidence[0].source_category == "official"
     assert result.search_debug.simplified_context.evidence[0].source == "openai.com"
     assert "OpenAI Newsroom" in result.search_debug.formatted_context
 
@@ -550,6 +570,9 @@ def test_search_with_debug_returns_evidence_chain():
     assert debug_info.raw_answer == "Primary provider answer"
     assert any(item.source == "manifold.markets" for item in debug_info.raw_results)
     assert any(item.source == "openai.com" for item in debug_info.raw_results)
+    assert debug_info.display_evidence[0].source_category == "official"
+    assert debug_info.display_evidence[0].is_official is True
+    assert debug_info.display_evidence[0].rank == 1
     assert debug_info.simplified_context.evidence[0].source == "openai.com"
     assert "Web Search Evidence:" in debug_info.formatted_context
 
@@ -557,6 +580,40 @@ def test_search_with_debug_returns_evidence_chain():
 
     print("\n" + "="*60)
     print("✅ TEST PASSED: Search With Debug Evidence Chain")
+    print("="*60)
+
+
+def test_display_evidence_marks_community_subdomains():
+    """
+    Test that community subdomains are categorized as community for display.
+    """
+    print("\n" + "="*60)
+    print("TEST: Display Evidence Community Classification")
+    print("="*60)
+
+    client = WebSearchClient(api_key="test-key")
+    evidence = [
+        SearchEvidenceItem(
+            title="OpenAI Community",
+            url="https://community.openai.com/t/example",
+            snippet="Community discussion.",
+            source="community.openai.com",
+            score=0.7,
+        )
+    ]
+
+    display_items = client._build_display_evidence(
+        "Will OpenAI release a new model in March this year? official source definition resolution criteria",
+        evidence,
+    )
+
+    assert display_items[0].source_category == "community"
+    assert display_items[0].is_official is False
+
+    print("\n✓ Community subdomains are labeled as community display evidence")
+
+    print("\n" + "="*60)
+    print("✅ TEST PASSED: Display Evidence Community Classification")
     print("="*60)
 
 
@@ -579,6 +636,7 @@ def run_all_tests():
         ("Official Site Query Generation", test_official_site_queries_are_generated),
         ("Official Site Search Merge", test_search_merges_official_site_results),
         ("Search With Debug Evidence Chain", test_search_with_debug_returns_evidence_chain),
+        ("Display Evidence Community Classification", test_display_evidence_marks_community_subdomains),
         ("Basic Analysis", test_basic_analysis),
         ("Output Format", test_output_format),
         ("High Risk Detection", test_high_risk_question),

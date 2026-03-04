@@ -143,6 +143,10 @@ class SearchDebugInfo(BaseModel):
         default_factory=list,
         description="Normalized search results before reranking"
     )
+    display_evidence: List["SearchDisplayEvidenceItem"] = Field(
+        default_factory=list,
+        description="Front-end-friendly evidence cards derived from reranked search results"
+    )
     simplified_context: SearchContext = Field(
         ...,
         description="Reranked search context used for prompt injection"
@@ -151,6 +155,34 @@ class SearchDebugInfo(BaseModel):
         ...,
         description="Prompt-ready text derived from the simplified context"
     )
+
+
+class SearchDisplayEvidenceItem(BaseModel):
+    """
+    Front-end-friendly evidence item derived from reranked search results.
+
+    Attributes:
+        rank: Display order after reranking
+        title: Display title
+        url: Evidence URL
+        source: Source/domain label
+        snippet: Short preview text
+        published_date: Optional publication date
+        relevance_score: Optional provider relevance score
+        source_category: High-level source type for UI grouping
+        is_official: Whether the source is likely official/authoritative
+        display_reason: Short explanation for why this result is useful
+    """
+    rank: int = Field(..., ge=1, description="1-based display rank")
+    title: str = Field(..., description="Evidence title")
+    url: str = Field(..., description="Evidence URL")
+    source: Optional[str] = Field(None, description="Source or domain name")
+    snippet: str = Field(..., description="Short display preview")
+    published_date: Optional[str] = Field(None, description="Publication date if available")
+    relevance_score: Optional[float] = Field(None, description="Provider relevance score")
+    source_category: str = Field(..., description="High-level source category for UI display")
+    is_official: bool = Field(..., description="Whether the source is likely official")
+    display_reason: str = Field(..., description="Short explanation for why this evidence is useful")
 
 
 class MarketProposal(BaseModel):

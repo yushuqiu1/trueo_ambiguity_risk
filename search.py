@@ -19,7 +19,12 @@ from config import (
     TAVILY_API_KEY,
     TAVILY_SEARCH_URL,
 )
-from models import SearchContext, SearchDebugInfo, SearchEvidenceItem
+from models import (
+    SearchContext,
+    SearchDebugInfo,
+    SearchDisplayEvidenceItem,
+    SearchEvidenceItem,
+)
 
 COMMUNITY_DOMAINS = {
     "reddit.com",
@@ -200,6 +205,7 @@ class WebSearchClient:
             follow_up_queries=follow_up_queries,
             raw_answer=self._clean_text(primary_response.get("answer")),
             raw_results=raw_evidence,
+            display_evidence=self._build_display_evidence(initial_query, search_context.evidence),
             simplified_context=search_context,
             formatted_context=formatted_context,
         )
@@ -371,6 +377,79 @@ class WebSearchClient:
             rank -= 4
 
         return rank
+
+    def _build_display_evidence(
+        self,
+        query: str,
+        evidence: list[SearchEvidenceItem],
+    ) -> list[SearchDisplayEvidenceItem]:
+        subject_terms = self._extract_subject_terms(query)
+        display_items = []
+
+        for index, item in enumerate(evidence, 1):
+            source_category = self._source_category(item, subject_terms)
+            is_official = source_category in {"official", "public-record", "academic"}
+            display_items.append(
+                SearchDisplayEvidenceItem(
+                    rank=index,
+                    title=item.title,
+                    url=item.url,
+                    source=item.source,
+                    snippet=item.snippet,
+                    published_date=item.published_date,
+                    relevance_score=item.score,
+                    source_category=source_category,
+                    is_official=is_official,
+                    display_reason=self._display_reason(item, source_category, subject_terms),
+                )
+            )
+
+        return display_items
+
+    def _source_category(self, item: SearchEvidenceItem, subject_terms: set[str]) -> str:
+        domain = (item.source or "").lower()
+        domain_labels = set(part for part in re.split(r"[^a-z0-9]+", domain) if part)
+        domain_matches_subject = bool(subject_terms & domain_labels)
+
+        if any(label in {"community", "forum", "forums", "discuss", "discussion"} for label in domain_labels):
+            return "community"
+        if domain.endswith(".gov") or ".gov." in domain:
+            return "public-record"
+        if domain.endswith(".edu") or ".edu." in domain:
+            return "academic"
+        if domain in COMMUNITY_DOMAINS:
+            return "community"
+        if domain in MEDIA_DOMAINS:
+            return "media"
+        if domain_matches_subject:
+            return "official"
+        return "other"
+
+    def _display_reason(
+        self,
+        item: SearchEvidenceItem,
+        source_category: str,
+        subject_terms: set[str],
+    ) -> str:
+        domain = (item.source or "").lower()
+
+        if source_category == "official":
+            return "Likely official source for announcements or release criteria."
+        if source_category == "public-record":
+            return "Government or public-record source that may support objective resolution."
+        if source_category == "academic":
+            return "Academic source that may clarify terminology or definitions."
+        if source_category == "media":
+            return "Media coverage that adds context but may not define final resolution criteria."
+        if source_category == "community":
+            return "Community discussion that may reveal dispute risk or competing interpretations."
+        if any(label in {"help", "docs", "blog", "news", "press"} for label in re.split(r"[^a-z0-9]+", domain) if label):
+            return "Potentially useful source for release notes or public-facing documentation."
+        if item.score is not None and item.score >= 0.7:
+            return "High-relevance search result worth reviewing for resolution details."
+        if bool(subject_terms & set(re.split(r"[^a-z0-9]+", domain))):
+            return "Source appears closely related to the subject named in the market question."
+        return "Supporting context for interpreting the market question."
 
     @staticmethod
     def _extract_subject_terms(query: str) -> set[str]:

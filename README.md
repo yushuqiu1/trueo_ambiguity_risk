@@ -89,6 +89,25 @@ The search layer is designed to help with ambiguity scoring, not event predictio
 
 ## Usage
 
+### Web App
+
+The repo includes a Streamlit frontend for analysts who want a browser-based workflow.
+
+Start it with:
+
+```bash
+streamlit run app.py
+```
+
+The UI supports:
+
+- question input and optional analyst context
+- few-shot toggle
+- web-search toggle
+- search-debug toggle
+- evidence cards for front-end-style display
+- raw/simplified search inspection for internal review
+
 ### Python API
 
 ```python
@@ -153,10 +172,24 @@ If `include_search_debug=True`, the final `RiskScoreResult` also includes a `sea
 - `follow_up_queries`
 - `raw_answer`
 - `raw_results` from all search queries before reranking
+- `display_evidence` for front-end-friendly evidence cards
 - `simplified_context`
 - `formatted_context`
 
 This is intended for debugging and product-side evidence-chain display.
+
+`display_evidence[]` is designed for direct UI rendering and includes:
+
+- `rank`
+- `title`
+- `url`
+- `source`
+- `snippet`
+- `published_date`
+- `relevance_score`
+- `source_category`
+- `is_official`
+- `display_reason`
 
 High-level flow:
 
@@ -225,6 +258,7 @@ If `include_search_debug=True`, the JSON response additionally includes a `searc
 
 ```
 trueo_ambiguity_risk/
+├── app.py               # Streamlit frontend
 ├── PLAN.md              # Design documentation
 ├── README.md            # This file
 ├── requirements.txt     # Python dependencies
