@@ -5,8 +5,10 @@ This module contains all prompt templates used for LLM interactions,
 including support for few-shot examples and web search context injection.
 """
 
-from typing import List, Optional
 import json
+from typing import List, Optional
+
+from config import FEW_SHOT_EXAMPLES_PATH
 
 # System prompt for the ambiguity analyzer
 SYSTEM_PROMPT = """You are an expert risk analyst specializing in prediction market prompt evaluation. Your task is to analyze market questions for potential ambiguity, vagueness, or clarity issues that could lead to disputes.
@@ -73,8 +75,8 @@ Respond ONLY with a valid JSON object in this exact format:
     "rationale": "<detailed explanation>"
 }}"""
 
-# Few-shot examples (updated with stricter scoring)
-FEW_SHOT_EXAMPLES = [
+# Built-in fallback examples used if the JSON file is unavailable or invalid.
+DEFAULT_FEW_SHOT_EXAMPLES = [
     {
         "question": "Will Apple release a new product this year?",
         "result": {
@@ -110,6 +112,31 @@ FEW_SHOT_EXAMPLES = [
 ]
 
 
+def load_few_shot_examples() -> List[dict]:
+    """
+    Load few-shot examples from disk with a safe fallback.
+
+    Returns:
+        List of few-shot example dictionaries
+    """
+    try:
+        with open(FEW_SHOT_EXAMPLES_PATH, "r", encoding="utf-8") as f:
+            examples = json.load(f)
+
+        if not isinstance(examples, list):
+            raise ValueError("Few-shot examples file must contain a list")
+
+        for example in examples:
+            if not isinstance(example, dict):
+                raise ValueError("Each few-shot example must be an object")
+            if "question" not in example or "result" not in example:
+                raise ValueError("Each few-shot example must contain 'question' and 'result'")
+
+        return examples
+    except (OSError, json.JSONDecodeError, ValueError):
+        return DEFAULT_FEW_SHOT_EXAMPLES
+
+
 def build_context_section(context: Optional[str] = None) -> str:
     """
     Build the context section for the prompt.
@@ -123,7 +150,7 @@ def build_context_section(context: Optional[str] = None) -> str:
     if not context:
         return ""
     
-    return f"""Additional Context (from web search):
+    return f"""Additional Context:
 {context}
 
 Please consider this context in your analysis."""
@@ -140,7 +167,7 @@ def build_few_shot_section(examples: Optional[List[dict]] = None) -> str:
         Formatted few-shot section string
     """
     if examples is None:
-        examples = FEW_SHOT_EXAMPLES
+        examples = load_few_shot_examples()
     
     if not examples:
         return ""
